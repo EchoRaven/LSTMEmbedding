@@ -1,5 +1,4 @@
 from abc import ABC
-
 import numpy
 import torch
 import torch.nn as nn
@@ -11,90 +10,61 @@ import torch.optim as optim
 import numpy as np
 
 
-class WordEmbedding(nn.Module):
-    def __init__(self,
-                 hidden_size,
-                 embed_dim,
-                 num_layer,
-                 word_size,
-                 padding_idx=0,
-                 droprate = 0.5
-                 ):
-        super(WordEmbedding, self).__init__()
-        # 对字符做embedding
-        self.embedding = nn.Embedding(num_embeddings=word_size,
-                                      embedding_dim=hidden_size,
-                                      padding_idx=padding_idx)
-
-        self.encoder = nn.LSTM(input_size=hidden_size,
-                               hidden_size=hidden_size,
-                               num_layers=num_layer,
-                               batch_first=True,
-                               dropout=droprate)
-        # 定义全连接层
-        self.fc = nn.Linear(hidden_size, embed_dim)
-        self.activate = nn.ReLU(inplace=True)
-
-    def forward(self, ipt):
-        ipt = self.embedding(ipt)
-        output, _ = self.encoder(ipt)
-        # 通过全连接层
-        output = self.activate(self.fc(output))
-        return output[:, -1, :]
+def getlist(file):
+    wordjson = json.load(open(file, encoding="utf-8"))
+    wordlist = []
+    alphalist = []
+    for i in wordjson:
+        wordlist.append(i)
+    for w in wordlist:
+        for a in w:
+            if a not in alphalist:
+                alphalist.append(a)
+    # 按照ascii排序
+    alphalist.sort()
+    return wordlist, alphalist
 
 
-class WordDecoder(nn.Module):
-    def __init__(self,
-                 in_dim,
-                 hidden_size,
-                 embed_dim,
-                 num_layer,
-                 droprate):
-        super(WordDecoder, self).__init__()
-        self.decoder = nn.LSTM(input_size=in_dim,
-                               hidden_size=hidden_size,
-                               num_layers=num_layer,
-                               batch_first=True,
-                               dropout=droprate)
-        self.fc = nn.Linear(hidden_size, embed_dim)
-        self.activate = nn.ReLU(inplace=True)
+# 构建数据集（其实就是GPT2的词表）
+class WordDataset(Dataset, ABC):
+    def __init__(self, file, tokenizer, maxlen=None):
+        wordlist, alphalist = getlist(file)
+        self.dataset = []
+        if maxlen is None:
+            maxlen = 0
+            for i in wordlist:
+                maxlen = max(maxlen, len(i))
+        self.maxlen = maxlen
+        for i in wordlist:
+            token = tokenizer.encode(i)
+            token = torch.cat([token, torch.zeros(maxlen - len(token))], dim=0).long()
+            self.dataset.append(token)
 
-    def forward(self, ipt, seqlen):
-        output, _ = self.decoder(ipt.unsqueeze(1).repeat(1, seqlen, 1))
-        output = self.activate(self.fc(output))
-        return output
+    def __len__(self):
+        return len(self.dataset)
 
+    def __getitem__(self, idx):
+        return self.dataset[idx]
 
-class WordSeq2Seq(nn.Module):
-    def __init__(self,
-                 embedding_hidden_size,
-                 embedding_embed_dim,
-                 embedding_num_layer,
-                 word_size,
-                 padding_idx,
-                 embedding_droprate,
+# （构建分词器，其实就是为字母编码）
+class WordTokenizer:
+    def __init__(self, file):
+        wordlist, alphalist = getlist(file)
+        self.alphalist = ["[PAD]", "[MSK]", "[EOS]", "[CLS]", "[SEP]", "[UNK]"]
+        self.alphalist.extend(alphalist)
+        self.wordsize = len(self.alphalist)
 
-                 decoder_in_dim,
-                 decoder_hidden_size,
-                 decoder_embed_dim,
-                 decoder_num_layer,
-                 decoder_droprate
-                 ):
-        super(WordSeq2Seq, self).__init__()
-        self.encoder = WordEmbedding(embedding_hidden_size,
-                                     embedding_embed_dim,
-                                     embedding_num_layer,
-                                     word_size,
-                                     padding_idx,
-                                     embedding_droprate)
+    def encode(self, ipt):
+        res = torch.LongTensor(len(ipt))
+        for i in range(len(ipt)):
+            res[i] = self.alphalist.index(ipt[i])
+        return res
 
-        self.decoder = WordDecoder(decoder_in_dim,
-                                   decoder_hidden_size,
-                                   decoder_embed_dim,
-                                   decoder_num_layer,
-                                   decoder_droprate)
+    def decode(self, ipt):
+        res = ""
+        for i in ipt:
+            res += self.alphalist[i]
+        return res
 
-    def forward(self, ipt, seqlen):
-        embedding = self.encoder(ipt)
-        output = self.decoder(embedding, seqlen)
-        return output
+    def __len__(self):
+        return len(self.alphalist)
